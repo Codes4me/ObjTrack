@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Center of Mass Tracker</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1e2127;
+    --panel-border: #2c3038;
+    --text: #e8eaed;
+    --muted: #9aa0aa;
+    --accent: #4fd1a5;
+    --accent-dim: #2a6b53;
+    --danger: #e8697a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  .app { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  p.subtitle { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .panel h2 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  button {
+    background: #2a2f38;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); }
+  button.danger:hover:not(:disabled) { border-color: var(--danger); }
+
+  label.field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  input[type="number"] { width: 60px; }
+  input[type="number"], input[type="range"] {
+    background: #14161a;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 4px 6px;
+  }
+
+  .stage {
+    display: flex;
+    justify-content: center;
+    background: #0b0c0e;
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 14px;
+  }
+  canvas {
+    max-width: 100%;
+    height: auto;
+    cursor: crosshair;
+    background: #000;
+    border-radius: 4px;
+  }
+
+  #status {
+    font-size: 0.82rem;
+    color: var(--accent);
+    min-height: 1.2em;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--panel-border); }
+  th { color: var(--muted); font-weight: 500; }
+
+  .hint { color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+  .file-btn { position: relative; overflow: hidden; }
+  .file-btn input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Center of Mass Tracker</h1>
+  <p class="subtitle">Upload or capture a photo/video, click the object to mark its center of mass, and export the tracked positions to CSV.</p>
+
+  <div class="panel">
+    <h2>Source</h2>
+    <div class="row">
+      <button class="file-btn">Upload Photo
+        <input type="file" id="filePhoto" accept="image/*">
+      </button>
+      <button class="file-btn">Upload Video
+        <input type="file" id="fileVideo" accept="video/*">
+      </button>
+      <button id="btnCamera">Start Camera</button>
+      <button id="btnSnapshot" disabled>Take Photo</button>
+      <button id="btnRecord" disabled>Record Video</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <canvas id="canvas" width="640" height="480"></canvas>
+  </div>
+
+  <div class="panel" id="videoControls" hidden>
+    <h2>Playback &amp; Tracking</h2>
+    <div class="row">
+      <button id="btnPlayPause">Play</button>
+      <button id="btnStepBack">◀ Step Back</button>
+      <button id="btnStep">Step Forward ▶</button>
+      <label class="field">FPS <input type="number" id="fpsInput" value="30" min="1" max="240"></label>
+      <label class="field">Color tolerance <input type="range" id="tolerance" min="5" max="150" value="17"><span id="tolVal">17</span></label>
+      <label class="field">Search radius <input type="range" id="searchRadius" min="20" max="400" value="95"><span id="radVal">95</span></label>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <label class="field"><input type="checkbox" id="calibToggle"> Calibration mode</label>
+    </div>
+    <div id="calibPanel" hidden style="margin-top:10px;">
+      <p class="hint" style="margin:0 0 8px;">
+        Replays your manual points: for each pair of manually-clicked adjacent frames, it predicts the
+        second point from the first using the auto-tracker, then measures the error against what you
+        actually clicked.
+      </p>
+      <div class="row">
+        <button id="btnCompare">Compare Auto vs Manual</button>
+        <button id="btnFindBest">Find Best Settings</button>
+      </div>
+      <p id="calibStatus" class="hint"></p>
+      <table id="calibTable" style="display:none;">
+        <thead><tr><th>frame</th><th>error (px)</th></tr></thead>
+        <tbody id="calibTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Scale Calibration (optional)</h2>
+    <p class="hint" style="margin:0 0 8px;">
+      Click two points a known distance apart (e.g. a ruler in frame) to also output x_cm/y_cm in the CSV.
+    </p>
+    <div class="row">
+      <label class="field">Known distance <input type="number" id="knownDistance" min="0" step="0.01" placeholder="e.g. 10" style="width:70px;"> cm</label>
+      <button id="btnSetScale">Pick Two Points</button>
+      <button id="btnClearScale">Clear Scale</button>
+    </div>
+    <p id="scaleStatus" class="hint">Not calibrated — x_cm/y_cm will be blank in export.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Data</h2>
+    <p id="status" class="hint">Click the object in the image to mark its center of mass.</p>
+    <div class="row" style="margin-bottom:10px;">
+      <button id="btnClear" class="danger">Clear Data</button>
+      <button id="btnExport" class="primary">Export CSV</button>
+      <span id="pointCount" class="hint">0 points logged</span>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>time (s)</th><th>x (px)</th><th>y (px)</th><th>x (cm)</th><th>y (cm)</th><th>source</th></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+  <p class="hint">
+    How it works: clicking a point samples its color and marks it as the tracked point. In video mode,
+    pressing Play (or Step Forward/Back) searches a window around the last known position each frame for
+    pixels matching that color and logs the centroid automatically. A manual click automatically advances
+    one frame afterward, so you can click through an object frame-by-frame. Click again at any time to
+    correct the point or re-acquire a lost target — this recalibrates the tracked color. Works best when
+    the object has a color that stands out from its background.
+  </p>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  const filePhoto = document.getElementById('filePhoto');
+  const fileVideo = document.getElementById('fileVideo');
+  const btnCamera = document.getElementById('btnCamera');
+  const btnSnapshot = document.getElementById('btnSnapshot');
+  const btnRecord = document.getElementById('btnRecord');
+  const videoControls = document.getElementById('videoControls');
+  const btnPlayPause = document.getElementById('btnPlayPause');
+  const btnStep = document.getElementById('btnStep');
+  const btnStepBack = document.getElementById('btnStepBack');
+  const fpsInput = document.getElementById('fpsInput');
+  const toleranceInput = document.getElementById('tolerance');
+  const tolVal = document.getElementById('tolVal');
+  const searchRadiusInput = document.getElementById('searchRadius');
+  const radVal = document.getElementById('radVal');
+  const statusEl = document.getElementById('status');
+  const btnClear = document.getElementById('btnClear');
+  const btnExport = document.getElementById('btnExport');
+  const pointCountEl = document.getElementById('pointCount');
+  const calibToggle = document.getElementById('calibToggle');
+  const calibPanel = document.getElementById('calibPanel');
+  const btnCompare = document.getElementById('btnCompare');
+  const btnFindBest = document.getElementById('btnFindBest');
+  const calibStatus = document.getElementById('calibStatus');
+  const calibTable = document.getElementById('calibTable');
+  const calibTableBody = document.getElementById('calibTableBody');
+  const knownDistanceInput = document.getElementById('knownDistance');
+  const btnSetScale = document.getElementById('btnSetScale');
+  const btnClearScale = document.getElementById('btnClearScale');
+  const scaleStatus = document.getElementById('scaleStatus');
+  const tableBody = document.getElementById('tableBody');
+
+  const MAX_DIM = 960;
+
+  let mode = null; // 'photo' | 'video' | 'camera-live'
+  let calibrating = false; // true while calibration is stepping/seeking the video
+  let scaleCmPerPx = null; // real-world scale from the two-point ruler calibration
+  let scalePick = null; // null | 'awaiting-first' | {x, y} (first point, awaiting second)
+  let currentImage = null;
+  let videoEl = null;
+  let camPreview = null;
+  let stream = null;
+  let mediaRecorder = null;
+  let isPlaying = false;
+  let isCameraLive = false;
+  let targetColor = null;
+  let lastPos = null;
+  let photoSessionId = 0;
+  // Keyed by frame number (video) or photo session id, so revisiting a frame
+  // (e.g. Step Back) updates its point instead of appending a duplicate row.
+  const dataMap = new Map();
+
+  function frameKey() {
+    return mode === 'video' ? Math.round(videoEl.currentTime * getFps()) : `photo-${photoSessionId}`;
+  }
+
+  function sortedData() {
+    return [...dataMap.values()].sort((a, b) => a.time - b.time);
+  }
+
+  function toCm(px) {
+    return scaleCmPerPx !== null ? (px * scaleCmPerPx).toFixed(3) : '';
+  }
+
+  toleranceInput.addEventListener('input', () => tolVal.textContent = toleranceInput.value);
+  searchRadiusInput.addEventListener('input', () => radVal.textContent = searchRadiusInput.value);
+
+  function computeDims(w, h) {
+    if (w <= MAX_DIM && h <= MAX_DIM) return { w, h };
+    const scale = MAX_DIM / Math.max(w, h);
+    return { w: Math.round(w * scale), h: Math.round(h * scale) };
+  }
+
+  function resetTrackState() {
+    lastPos = null;
+    targetColor = null;
+    scalePick = null;
+    statusEl.textContent = 'Click the object in the image to mark its center of mass.';
+  }
+
+  function getFps() {
+    return parseFloat(fpsInput.value) || 30;
+  }
+
+  function drawBaseFrame() {
+    if (mode === 'photo' && currentImage) {
+      ctx.drawImage(currentImage, 0, 0, canvas.width, canvas.height);
+    } else if (mode === 'video' && videoEl) {
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    } else if (mode === 'camera-live' && camPreview) {
+      ctx.drawImage(camPreview, 0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  function drawMarker() {
+    if (!lastPos) return;
+    ctx.save();
+    ctx.strokeStyle = '#4fd1a5';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(lastPos.x, lastPos.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(lastPos.x - 14, lastPos.y);
+    ctx.lineTo(lastPos.x + 14, lastPos.y);
+    ctx.moveTo(lastPos.x, lastPos.y - 14);
+    ctx.lineTo(lastPos.x, lastPos.y + 14);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawCalibPoint(pos) {
+    ctx.save();
+    ctx.fillStyle = '#f5c451';
+    ctx.strokeStyle = '#00000080';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function getCanvasPos(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (evt.clientX - rect.left) * scaleX,
+      y: (evt.clientY - rect.top) * scaleY
+    };
+  }
+
+  function sampleColor(x, y, radius) {
+    const x0 = Math.max(0, Math.round(x - radius));
+    const y0 = Math.max(0, Math.round(y - radius));
+    const w = Math.min(canvas.width - x0, radius * 2);
+    const h = Math.min(canvas.height - y0, radius * 2);
+    if (w <= 0 || h <= 0) return { r: 0, g: 0, b: 0 };
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let r = 0, g = 0, b = 0, count = w * h;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+    return { r: r / count, g: g / count, b: b / count };
+  }
+
+  function colorDistance(r1, g1, b1, r2, g2, b2) {
+    return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+  }
+
+  function findCentroid(cx, cy, radius, target, tolerance) {
+    const x0 = Math.max(0, Math.round(cx - radius));
+    const y0 = Math.max(0, Math.round(cy - radius));
+    const x1 = Math.min(canvas.width, Math.round(cx + radius));
+    const y1 = Math.min(canvas.height, Math.round(cy + radius));
+    const w = x1 - x0, h = y1 - y0;
+    if (w <= 0 || h <= 0) return null;
+    const d = ctx.getImageData(x0, y0, w, h).data;
+    let sumX = 0, sumY = 0, count = 0;
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const idx = (j * w + i) * 4;
+        if (colorDistance(d[idx], d[idx + 1], d[idx + 2], target.r, target.g, target.b) <= tolerance) {
+          sumX += i; sumY += j; count++;
+        }
+      }
+    }
+    if (count === 0) return null;
+    return { x: x0 + sumX / count, y: y0 + sumY / count, count };
+  }
+
+  function logPoint(pos, source) {
+    const time = mode === 'video' ? videoEl.currentTime : 0;
+    dataMap.set(frameKey(), {
+      time,
+      x: Math.round(pos.x * 10) / 10,
+      y: Math.round(pos.y * 10) / 10,
+      source
+    });
+    updateTable();
+  }
+
+  function updateTable() {
+    const sorted = sortedData();
+    pointCountEl.textContent = `${sorted.length} point${sorted.length === 1 ? '' : 's'} logged`;
+    tableBody.innerHTML = sorted.slice(-8).map((d, i) =>
+      `<tr><td>${sorted.length - Math.min(8, sorted.length) + i}</td><td>${d.time.toFixed(3)}</td><td>${d.x}</td><td>${d.y}</td>` +
+      `<td>${toCm(d.x) || '—'}</td><td>${toCm(d.y) || '—'}</td><td>${d.source}</td></tr>`
+    ).join('');
+  }
+
+  function performTrackingStep() {
+    if (calibrating) return; // calibration seeks the video itself; don't auto-log those frames
+    drawBaseFrame();
+    const existing = dataMap.get(frameKey());
+    if (existing) {
+      // Already have a point for this frame (e.g. revisited via Step Back) —
+      // show it instead of re-tracking and appending a duplicate row.
+      lastPos = { x: existing.x, y: existing.y };
+      statusEl.textContent = `Frame already logged (${existing.source}).`;
+    } else if (targetColor && lastPos) {
+      const tol = parseFloat(toleranceInput.value);
+      const rad = parseFloat(searchRadiusInput.value);
+      const result = findCentroid(lastPos.x, lastPos.y, rad, targetColor, tol);
+      if (result) {
+        lastPos = { x: result.x, y: result.y };
+        logPoint(lastPos, 'auto');
+        statusEl.textContent = `Tracking (${result.count} matching px)`;
+      } else {
+        statusEl.textContent = 'Target lost — click the object to re-acquire.';
+        if (isPlaying) {
+          videoEl.pause();
+          isPlaying = false;
+          btnPlayPause.textContent = 'Play';
+        }
+      }
+    }
+    drawMarker();
+  }
+
+  function trackLoop() {
+    if (!isPlaying) return;
+    performTrackingStep();
+    if (!videoEl.paused && !videoEl.ended) {
+      requestAnimationFrame(trackLoop);
+    } else {
+      isPlaying = false;
+      btnPlayPause.textContent = 'Play';
+    }
+  }
+
+  canvas.addEventListener('click', (evt) => {
+    if (!mode || mode === 'camera-live' || calibrating) return;
+    const pos = getCanvasPos(evt);
+
+    if (scalePick) {
+      if (scalePick === 'awaiting-first') {
+        scalePick = { x: pos.x, y: pos.y };
+        scaleStatus.textContent = 'Click the second reference point.';
+        drawBaseFrame();
+        drawMarker();
+        drawCalibPoint(pos);
+        return;
+      }
+      const first = scalePick;
+      const pxDist = Math.hypot(pos.x - first.x, pos.y - first.y);
+      const dist = parseFloat(knownDistanceInput.value);
+      scalePick = null;
+      drawBaseFrame();
+      drawMarker();
+      if (!dist || dist <= 0) {
+        scaleStatus.textContent = 'Known distance is invalid — scale not set.';
+      } else if (pxDist < 1) {
+        scaleStatus.textContent = 'Those two points were too close together — try again.';
+      } else {
+        scaleCmPerPx = dist / pxDist;
+        scaleStatus.textContent = `Calibrated: ${scaleCmPerPx.toFixed(4)} cm/px (${pxDist.toFixed(1)}px = ${dist}cm).`;
+        updateTable();
+      }
+      return;
+    }
+
+    drawBaseFrame();
+    targetColor = sampleColor(pos.x, pos.y, 5);
+    lastPos = pos;
+    logPoint(pos, 'manual');
+    drawMarker();
+    statusEl.textContent = 'Point set — tracking will follow this color.';
+    if (mode === 'video') stepFrame(1);
+  });
+
+  // ---- Photo upload ----
+  filePhoto.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    stopCameraStream();
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const dims = computeDims(img.width, img.height);
+      canvas.width = dims.w;
+      canvas.height = dims.h;
+      currentImage = img;
+      mode = 'photo';
+      photoSessionId++;
+      videoControls.hidden = true;
+      resetTrackState();
+      drawBaseFrame();
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+    e.target.value = '';
+  });
+
+  // ---- Video upload ----
+  fileVideo.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    loadVideoFromSource(URL.createObjectURL(file));
+    e.target.value = '';
+  });
+
+  function loadVideoFromSource(url) {
+    stopCameraStream();
+    if (videoEl) videoEl.remove();
+    videoEl = document.createElement('video');
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    // Must be attached to the DOM (even if invisible) or some browsers
+    // never decode frames for it, so drawImage()/currentTime updates stall.
+    videoEl.style.cssText = 'position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;';
+    document.body.appendChild(videoEl);
+    videoEl.addEventListener('loadedmetadata', () => {
+      const dims = computeDims(videoEl.videoWidth, videoEl.videoHeight);
+      canvas.width = dims.w;
+      canvas.height = dims.h;
+      videoEl.currentTime = 0;
+    });
+    videoEl.addEventListener('seeked', performTrackingStep);
+    videoEl.addEventListener('ended', () => {
+      isPlaying = false;
+      btnPlayPause.textContent = 'Play';
+    });
+    videoEl.src = url;
+    mode = 'video';
+    videoControls.hidden = false;
+    resetTrackState();
+  }
+
+  btnPlayPause.addEventListener('click', () => {
+    if (mode !== 'video') return;
+    if (videoEl.paused) {
+      videoEl.play();
+      isPlaying = true;
+      btnPlayPause.textContent = 'Pause';
+      requestAnimationFrame(trackLoop);
+    } else {
+      videoEl.pause();
+      isPlaying = false;
+      btnPlayPause.textContent = 'Play';
+    }
+  });
+
+  function stepFrame(dir) {
+    if (mode !== 'video') return;
+    videoEl.pause();
+    isPlaying = false;
+    btnPlayPause.textContent = 'Play';
+    let next = videoEl.currentTime + dir * (1 / getFps());
+    next = Math.max(0, next);
+    if (videoEl.duration) next = Math.min(videoEl.duration, next);
+    videoEl.currentTime = next;
+  }
+
+  btnStep.addEventListener('click', () => stepFrame(1));
+  btnStepBack.addEventListener('click', () => stepFrame(-1));
+
+  // ---- Camera ----
+  btnCamera.addEventListener('click', async () => {
+    if (stream) {
+      stopCameraStream();
+      btnCamera.textContent = 'Start Camera';
+      btnSnapshot.disabled = true;
+      btnRecord.disabled = true;
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (err) {
+      alert('Camera access failed: ' + err.message);
+      return;
+    }
+    camPreview = document.createElement('video');
+    camPreview.srcObject = stream;
+    camPreview.muted = true;
+    camPreview.playsInline = true;
+    camPreview.style.cssText = 'position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;';
+    document.body.appendChild(camPreview);
+    await camPreview.play();
+    const dims = computeDims(camPreview.videoWidth || 640, camPreview.videoHeight || 480);
+    canvas.width = dims.w;
+    canvas.height = dims.h;
+    videoControls.hidden = true;
+    mode = 'camera-live';
+    isCameraLive = true;
+    resetTrackState();
+    statusEl.textContent = 'Live camera preview. Take a photo or start recording.';
+    requestAnimationFrame(function loop() {
+      if (!isCameraLive) return;
+      drawBaseFrame();
+      requestAnimationFrame(loop);
+    });
+    btnCamera.textContent = 'Stop Camera';
+    btnSnapshot.disabled = false;
+    btnRecord.disabled = false;
+  });
+
+  function stopCameraStream() {
+    isCameraLive = false;
+    if (camPreview) {
+      camPreview.remove();
+      camPreview = null;
+    }
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  btnSnapshot.addEventListener('click', () => {
+    drawBaseFrame();
+    const dataUrl = canvas.toDataURL('image/png');
+    const img = new Image();
+    img.onload = () => {
+      currentImage = img;
+      mode = 'photo';
+      photoSessionId++;
+      stopCameraStream();
+      btnCamera.textContent = 'Start Camera';
+      btnSnapshot.disabled = true;
+      btnRecord.disabled = true;
+      videoControls.hidden = true;
+      resetTrackState();
+      drawBaseFrame();
+    };
+    img.src = dataUrl;
+  });
+
+  btnRecord.addEventListener('click', () => {
+    if (!stream) return;
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      return;
+    }
+    const chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      stopCameraStream();
+      btnCamera.textContent = 'Start Camera';
+      btnSnapshot.disabled = true;
+      btnRecord.disabled = true;
+      btnRecord.textContent = 'Record Video';
+      loadVideoFromSource(url);
+    };
+    mediaRecorder.start();
+    btnRecord.textContent = 'Stop Recording';
+  });
+
+  // ---- Scale calibration ----
+  btnSetScale.addEventListener('click', () => {
+    if (!mode || mode === 'camera-live') {
+      alert('Load a photo or video first.');
+      return;
+    }
+    const dist = parseFloat(knownDistanceInput.value);
+    if (!dist || dist <= 0) {
+      alert('Enter the known real-world distance (in cm) first.');
+      return;
+    }
+    scalePick = 'awaiting-first';
+    scaleStatus.textContent = 'Click the first reference point on the image.';
+  });
+
+  btnClearScale.addEventListener('click', () => {
+    scaleCmPerPx = null;
+    scalePick = null;
+    scaleStatus.textContent = 'Not calibrated — x_cm/y_cm will be blank in export.';
+    updateTable();
+  });
+
+  // ---- Data ----
+  btnClear.addEventListener('click', () => {
+    if (dataMap.size && !confirm('Clear all logged points?')) return;
+    dataMap.clear();
+    updateTable();
+  });
+
+  btnExport.addEventListener('click', () => {
+    const sorted = sortedData();
+    if (sorted.length === 0) {
+      alert('No data to export yet.');
+      return;
+    }
+    const header = 'index,time_s,x_px,y_px,x_cm,y_cm,source\n';
+    const rows = sorted.map((d, i) =>
+      `${i},${d.time.toFixed(4)},${d.x},${d.y},${toCm(d.x)},${toCm(d.y)},${d.source}`
+    ).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `center_of_mass_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // ---- Calibration: compare auto-tracking to manual points, and grid-search settings ----
+  calibToggle.addEventListener('change', () => {
+    calibPanel.hidden = !calibToggle.checked;
+  });
+
+  function seekTo(time) {
+    return new Promise((resolve) => {
+      if (Math.abs(videoEl.currentTime - time) < 1e-4) { resolve(); return; }
+      const handler = () => { videoEl.removeEventListener('seeked', handler); resolve(); };
+      videoEl.addEventListener('seeked', handler);
+      videoEl.currentTime = time;
+    });
+  }
+
+  // Pairs of manually-clicked points on adjacent (or near-adjacent) frames —
+  // these are the ground truth the auto-tracker gets graded against.
+  function buildManualPairs() {
+    const manualSorted = [...dataMap.entries()]
+      .filter(([, v]) => v.source === 'manual')
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => a.key - b.key);
+    const pairs = [];
+    for (let i = 1; i < manualSorted.length; i++) {
+      const prev = manualSorted[i - 1], next = manualSorted[i];
+      const gap = next.key - prev.key;
+      if (gap >= 1 && gap <= 2) pairs.push({ prev, next });
+    }
+    return pairs;
+  }
+
+  // For each pair, predicts `next` from `prev` using the auto-tracker and
+  // returns the pixel error (null if tracking was lost).
+  async function evaluatePairs(pairs, tol, rad) {
+    const errors = [];
+    for (const { prev, next } of pairs) {
+      await seekTo(prev.time);
+      drawBaseFrame();
+      const target = sampleColor(prev.x, prev.y, 5);
+      await seekTo(next.time);
+      drawBaseFrame();
+      const result = findCentroid(prev.x, prev.y, rad, target, tol);
+      errors.push({
+        frame: next.key,
+        err: result ? Math.hypot(result.x - next.x, result.y - next.y) : null
+      });
+    }
+    return errors;
+  }
+
+  async function withCalibration(fn) {
+    if (mode !== 'video') return;
+    const pairs = buildManualPairs();
+    if (pairs.length === 0) {
+      calibStatus.textContent = 'Need at least two manual points on adjacent frames to run this.';
+      calibTable.style.display = 'none';
+      return;
+    }
+    btnCompare.disabled = true;
+    btnFindBest.disabled = true;
+    btnPlayPause.disabled = true;
+    btnStep.disabled = true;
+    btnStepBack.disabled = true;
+    calibrating = true;
+    const originalTime = videoEl.currentTime;
+    try {
+      await fn(pairs);
+    } finally {
+      await seekTo(originalTime);
+      drawBaseFrame();
+      drawMarker();
+      calibrating = false;
+      btnCompare.disabled = false;
+      btnFindBest.disabled = false;
+      btnPlayPause.disabled = false;
+      btnStep.disabled = false;
+      btnStepBack.disabled = false;
+    }
+  }
+
+  btnCompare.addEventListener('click', () => withCalibration(async (pairs) => {
+    const tol = parseFloat(toleranceInput.value);
+    const rad = parseFloat(searchRadiusInput.value);
+    const errors = await evaluatePairs(pairs, tol, rad);
+    const valid = errors.filter((e) => e.err !== null);
+    const avg = valid.length ? valid.reduce((s, e) => s + e.err, 0) / valid.length : null;
+    const lost = errors.length - valid.length;
+    calibStatus.textContent = avg !== null
+      ? `Avg error: ${avg.toFixed(1)}px over ${valid.length} pair(s)${lost ? `, lost tracking on ${lost}` : ''} (tolerance ${tol}, radius ${rad}).`
+      : `Tracking lost on all ${errors.length} pair(s) with these settings.`;
+    calibTable.style.display = '';
+    calibTableBody.innerHTML = errors.map((e) =>
+      `<tr><td>${e.frame}</td><td>${e.err !== null ? e.err.toFixed(1) : 'lost'}</td></tr>`
+    ).join('');
+  }));
+
+  // Values around `center`, spaced by `step`, clamped to [min, max] and deduped.
+  function neighborhood(center, span, step, min, max) {
+    const vals = new Set();
+    for (let v = center - span; v <= center + span; v += step) {
+      vals.add(Math.max(min, Math.min(max, Math.round(v))));
+    }
+    return [...vals].sort((a, b) => a - b);
+  }
+
+  async function scanGrid(pairs, tolValues, radValues, label) {
+    const total = tolValues.length * radValues.length;
+    let best = null;
+    let tested = 0;
+    for (const tol of tolValues) {
+      for (const rad of radValues) {
+        tested++;
+        calibStatus.textContent = `${label} ${tested}/${total} (tolerance ${tol}, radius ${rad})...`;
+        const errors = await evaluatePairs(pairs, tol, rad);
+        const lost = errors.filter((e) => e.err === null).length;
+        const avg = errors.reduce((s, e) => s + (e.err !== null ? e.err : rad * 2), 0) / errors.length;
+        if (!best || avg < best.avg) best = { tol, rad, avg, lost };
+      }
+    }
+    return best;
+  }
+
+  btnFindBest.addEventListener('click', () => withCalibration(async (pairs) => {
+    const coarse = await scanGrid(
+      pairs,
+      [10, 20, 30, 40, 55, 70, 90, 120],
+      [30, 50, 80, 120, 180, 250],
+      'Coarse search'
+    );
+    // Refine around the coarse winner with a tighter grid, since the coarse
+    // steps (10-15 on tolerance, 30-70 on radius) can straddle the true optimum.
+    const refined = await scanGrid(
+      pairs,
+      neighborhood(coarse.tol, 10, 5, 5, 150),
+      neighborhood(coarse.rad, 24, 12, 20, 400),
+      'Refining'
+    );
+    const best = refined.avg < coarse.avg ? refined : coarse;
+
+    toleranceInput.value = best.tol;
+    tolVal.textContent = best.tol;
+    searchRadiusInput.value = best.rad;
+    radVal.textContent = best.rad;
+    calibStatus.textContent = `Best: tolerance ${best.tol}, radius ${best.rad} — avg error ${best.avg.toFixed(1)}px` +
+      `${best.lost ? ` (lost tracking on ${best.lost}/${pairs.length})` : ''}. Sliders updated.`;
+    calibTable.style.display = 'none';
+  }));
+})();
+</script>
+</body>
+</html>
